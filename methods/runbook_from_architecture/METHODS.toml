@@ -1,0 +1,10 @@
+[package]
+name = "runbook_from_architecture"
+address = "github.com/RobinHrt/tech_runbook_from_architecture"
+version = "1.0.0"
+description = "Operations Runbook Generator: vision LLM analyzes architecture diagrams, batch generates per-service runbooks"
+license = "MIT"
+main_pipe = "generate_runbook"
+
+[exports.tech_runbook_from_architecture]
+pipes = ["generate_runbook", "analyze_architecture", "generate_service_runbook", "compile_runbook"]
