@@ -1,0 +1,154 @@
+domain      = "tech_runbook_from_architecture"
+description = "Operations Runbook Generator: takes an architecture diagram image and service info to produce a complete runbook with per-service troubleshooting, restart, rollback procedures, and escalation paths"
+main_pipe   = "generate_runbook"
+
+# --- Concepts ---
+
+[concept.ServiceDescription]
+description = "A service extracted from an architecture diagram with dependencies and criticality"
+
+[concept.ServiceDescription.structure]
+name = {type = "text", description = "Service name", required = true}
+purpose = {type = "text", description = "What this service does", required = true}
+dependencies = {type = "list", item_type = "text", description = "Services this one depends on"}
+dependents = {type = "list", item_type = "text", description = "Services that depend on this one"}
+criticality = {type = "text", description = "How critical this service is", required = true, choices = ["critical", "high", "medium", "low"]}
+health_check_endpoints = {type = "list", item_type = "text", description = "Health check endpoint URLs"}
+
+[concept.TroubleshootingStep]
+description = "A single troubleshooting step with command, expected result, and escalation trigger"
+
+[concept.TroubleshootingStep.structure]
+step_number = {type = "integer", description = "Step execution order", required = true}
+action = {type = "text", description = "What to do", required = true}
+expected_result = "Expected result if successful"
+if_fails = "What to do if this step fails"
+command = "Exact command to run"
+escalation_trigger = {type = "text", description = "Condition that triggers escalation", required = true}
+
+[concept.ServiceRunbook]
+description = "Operations runbook for a single service with troubleshooting, restart, and rollback procedures"
+
+[concept.ServiceRunbook.structure]
+service_name = {type = "text", description = "Name of the service", required = true}
+overview = {type = "text", description = "Service overview and impact assessment", required = true}
+common_failure_modes = {type = "list", item_type = "text", description = "Common ways this service fails"}
+troubleshooting_steps = {type = "list", item_type = "concept", item_concept_ref = "tech_runbook_from_architecture.TroubleshootingStep", description = "Ordered troubleshooting steps", required = true}
+restart_procedure = {type = "text", description = "Safe restart procedure", required = true}
+rollback_procedure = {type = "text", description = "Rollback procedure", required = true}
+key_metrics = {type = "list", item_type = "text", description = "Key metrics to monitor"}
+escalation_contacts = "Who to escalate to"
+sla_target = "SLA target for this service"
+
+[concept.Runbook]
+description = "Complete operations runbook with per-service procedures, cross-service procedures, and escalation path"
+
+[concept.Runbook.structure]
+system_name = {type = "text", description = "Name of the system", required = true}
+system_overview = {type = "text", description = "Overview of the entire system", required = true}
+architecture_summary = "Summary of the architecture from the diagram"
+service_runbooks = {type = "list", item_type = "concept", item_concept_ref = "tech_runbook_from_architecture.ServiceRunbook", description = "Per-service runbooks", required = true}
+cross_service_procedures = "Procedures involving multiple services"
+escalation_path = {type = "text", description = "General escalation path", required = true}
+emergency_contacts = "Emergency contact list"
+
+# --- Pipes ---
+
+[pipe.generate_runbook]
+type = "PipeSequence"
+description = "Main pipeline: analyzes architecture image, generates per-service runbooks in batch, then compiles the full runbook"
+inputs = {architecture_diagram = "Image", service_info = "Text"}
+output = "Runbook"
+steps = [
+    {pipe = "analyze_architecture", result = "services"},
+    {pipe = "generate_service_runbook", result = "service_runbooks", batch_over = "services", batch_as = "service"},
+    {pipe = "compile_runbook", result = "runbook"},
+]
+
+[pipe.analyze_architecture]
+type = "PipeLLM"
+description = "Analyze an architecture diagram image to identify all services, dependencies, and criticality"
+inputs = {architecture_diagram = "Image", service_info = "Text"}
+output = "ServiceDescription[]"
+model = "$vision"
+prompt = """
+You are an SRE analyzing an architecture diagram to identify every service in the system.
+
+Additional service information:
+@service_info
+
+Architecture diagram:
+@architecture_diagram
+
+For each service you can identify:
+- name: The service name as shown in the diagram
+- purpose: What this service does based on its name, position, and connections
+- dependencies: Which other services it depends on (follows arrows or connections)
+- dependents: Which services depend on it
+- criticality: critical (user-facing, no redundancy), high (important but has fallbacks), medium (internal, degraded mode possible), low (non-essential)
+- health_check_endpoints: Suggest standard health check endpoints based on service type
+
+Note data flow directions, external dependencies, and single points of failure. Be thorough — missing a service means missing a runbook section.
+"""
+
+[pipe.generate_service_runbook]
+type = "PipeLLM"
+description = "Generate a complete operations runbook for a single service"
+inputs = {service = "ServiceDescription", service_info = "Text"}
+output = "ServiceRunbook"
+model = "$engineering-structured"
+prompt = """
+You are an SRE writing an operations runbook for a single service. This will be used by an on-call engineer at 3am who may not know this service.
+
+Service details:
+@service
+
+Additional context:
+@service_info
+
+Generate a complete runbook:
+- service_name: The service name
+- overview: What this service does, what breaks if it goes down, and blast radius
+- common_failure_modes: List the most likely ways this service fails
+- troubleshooting_steps: Ordered steps, each with:
+  - step_number, action, expected_result, if_fails
+  - command: Exact command to run (kubectl, curl, psql, etc.)
+  - escalation_trigger: Explicit condition to escalate (e.g., "If error rate exceeds 5% after restart")
+- restart_procedure: Safe restart steps respecting dependencies
+- rollback_procedure: How to roll back to the previous version
+- key_metrics: What to watch (error rate, latency p99, CPU, memory, queue depth)
+- escalation_contacts: Who to page and when
+- sla_target: Target availability
+
+Write for someone who is tired and stressed. Be explicit. No ambiguity.
+"""
+
+[pipe.compile_runbook]
+type = "PipeLLM"
+description = "Compile all service runbooks into a complete system runbook with cross-service procedures"
+inputs = {services = "ServiceDescription[]", service_runbooks = "ServiceRunbook[]"}
+output = "Runbook"
+model = "$engineering-structured"
+prompt = """
+You are compiling a complete operations runbook for an entire system.
+
+Service architecture:
+@services
+
+Per-service runbooks:
+@service_runbooks
+
+Compile the final runbook:
+- system_name: Infer from the services
+- system_overview: What this system does end-to-end
+- architecture_summary: How services connect and depend on each other
+- service_runbooks: Include all per-service runbooks
+- cross_service_procedures: Add procedures that span services:
+  - Full system health check (check all services in dependency order)
+  - Complete restart order (respecting dependencies — start dependencies first)
+  - Disaster recovery procedure
+- escalation_path: General escalation path (on-call → team lead → engineering manager → VP)
+- emergency_contacts: Template for emergency contacts
+
+The runbook must be usable by any on-call engineer, even one unfamiliar with the system.
+"""

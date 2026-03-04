@@ -1,0 +1,14 @@
+{
+  "architecture_diagram": {
+    "concept": "native.Image",
+    "content": {
+      "url": "path/to/architecture-diagram.png"
+    }
+  },
+  "service_info": {
+    "concept": "native.Text",
+    "content": {
+      "text": "text_value"
+    }
+  }
+}
